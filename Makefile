@@ -1,9 +1,9 @@
-.PHONY: test
+.PHONY: all deps test build build/app build/ctl build/web build/docker clean install install-man dev
 .POSIX:
 .SUFFIXES:
 
 GIT_COMMIT := $(shell git rev-parse HEAD 2> /dev/null)
-GIT_TAG := $(shell git tag --points-at HEAD 2> /dev/null | head -n 1)
+GIT_TAG := $(shell git describe --abbrev=0 --tags)
 
 SERVICE = autobrr
 GO = go
@@ -11,11 +11,12 @@ RM = rm
 GOFLAGS = "-X main.commit=$(GIT_COMMIT) -X main.version=$(GIT_TAG)"
 PREFIX = /usr/local
 BINDIR = bin
+MANDIR = share/man
 
 all: clean build
 
 deps:
-	cd web && yarn install
+	pnpm --dir web install --frozen-lockfile
 	go mod download
 
 test:
@@ -30,7 +31,8 @@ build/ctl:
 	go build -ldflags $(GOFLAGS) -o bin/autobrrctl cmd/autobrrctl/main.go
 
 build/web:
-	cd web && yarn build
+	pnpm --dir web run build
+	@touch web/dist/.gitkeep 2>/dev/null  # To avoid accidental commit of the deletionn
 
 build/docker:
 	docker build -t autobrr:dev -f Dockerfile . --build-arg GIT_TAG=$(GIT_TAG) --build-arg GIT_COMMIT=$(GIT_COMMIT)
@@ -38,7 +40,21 @@ build/docker:
 clean:
 	$(RM) -rf bin
 
-install: all
-	echo $(DESTDIR)$(PREFIX)/$(BINDIR)
+install-man:
+	mkdir -p $(DESTDIR)$(PREFIX)/$(MANDIR)/man1
+	cp -f docs/man/autobrr.1 $(DESTDIR)$(PREFIX)/$(MANDIR)/man1/
+
+install: all install-man
 	mkdir -p $(DESTDIR)$(PREFIX)/$(BINDIR)
 	cp -f bin/$(SERVICE) $(DESTDIR)$(PREFIX)/$(BINDIR)
+
+dev:
+	@if ! command -v tmux >/dev/null 2>&1; then \
+		echo "tmux is not installed. Please install it to use dev mode."; \
+		echo "On Ubuntu/Debian: sudo apt install tmux"; \
+		echo "On macOS: brew install tmux"; \
+		exit 1; \
+	fi
+	@tmux new-session -d -s autobrr-dev 'pnpm --dir web dev'
+	@tmux split-window -h 'go run cmd/$(SERVICE)/main.go'
+	@tmux -2 attach-session -d

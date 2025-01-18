@@ -1,45 +1,81 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package action
 
 import (
 	"context"
-	"github.com/autobrr/autobrr/internal/domain"
-	"github.com/autobrr/autobrr/pkg/errors"
 	"os"
 
-	"github.com/mrobinsn/go-rtorrent/rtorrent"
+	"github.com/autobrr/autobrr/internal/domain"
+	"github.com/autobrr/autobrr/pkg/errors"
+
+	"github.com/autobrr/go-rtorrent"
 )
 
-func (s *service) rtorrent(action domain.Action, release domain.Release) ([]string, error) {
-	s.log.Debug().Msgf("action rTorrent: %v", action.Name)
+func (s *service) rtorrent(ctx context.Context, action *domain.Action, release domain.Release) ([]string, error) {
+	s.log.Debug().Msgf("action rTorrent: %s", action.Name)
 
-	var err error
-
-	// get client for action
-	client, err := s.clientSvc.FindByID(context.TODO(), action.ClientID)
+	client, err := s.clientSvc.GetClient(ctx, action.ClientID)
 	if err != nil {
-		s.log.Error().Stack().Err(err).Msgf("error finding client: %v", action.ClientID)
-		return nil, err
+		return nil, errors.Wrap(err, "could not get client with id %d", action.ClientID)
+	}
+	action.Client = client
+
+	if !client.Enabled {
+		return nil, errors.New("client %s %s not enabled", client.Type, client.Name)
 	}
 
-	if client == nil {
-		return nil, errors.New("could not find client by id: %v", action.ClientID)
-	}
+	rt := client.Client.(*rtorrent.Client)
 
 	var rejections []string
 
-	if release.TorrentTmpFile == "" {
-		if err = release.DownloadTorrentFile(); err != nil {
-			s.log.Error().Err(err).Msgf("could not download torrent file for release: %v", release.TorrentName)
-			return nil, err
+	if release.HasMagnetUri() {
+		var args []*rtorrent.FieldValue
+
+		if action.Label != "" {
+			args = append(args, &rtorrent.FieldValue{
+				Field: rtorrent.DLabel,
+				Value: action.Label,
+			})
 		}
+		if action.SavePath != "" {
+			if action.ContentLayout == domain.ActionContentLayoutSubfolderNone {
+				args = append(args, &rtorrent.FieldValue{
+					Field: "d.directory_base",
+					Value: action.SavePath,
+				})
+			} else {
+				args = append(args, &rtorrent.FieldValue{
+					Field: rtorrent.DDirectory,
+					Value: action.SavePath,
+				})
+			}
+		}
+
+		var addTorrentMagnet func(context.Context, string, ...*rtorrent.FieldValue) error
+		if action.Paused {
+			addTorrentMagnet = rt.AddStopped
+		} else {
+			addTorrentMagnet = rt.Add
+		}
+
+		if err := addTorrentMagnet(ctx, release.MagnetURI, args...); err != nil {
+			return nil, errors.Wrap(err, "could not add torrent from magnet: %s", release.MagnetURI)
+		}
+
+		s.log.Info().Msgf("torrent from magnet successfully added to client: '%s'", client.Name)
+
+		return nil, nil
 	}
 
-	// create client
-	rt := rtorrent.New(client.Host, true)
+	if err := s.downloadSvc.DownloadRelease(ctx, &release); err != nil {
+		return nil, errors.Wrap(err, "could not download torrent file for release: %s", release.TorrentName)
+	}
 
 	tmpFile, err := os.ReadFile(release.TorrentTmpFile)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not read torrent file: %v", release.TorrentTmpFile)
+		return nil, errors.Wrap(err, "could not read torrent file: %s", release.TorrentTmpFile)
 	}
 
 	var args []*rtorrent.FieldValue
@@ -51,17 +87,31 @@ func (s *service) rtorrent(action domain.Action, release domain.Release) ([]stri
 		})
 	}
 	if action.SavePath != "" {
-		args = append(args, &rtorrent.FieldValue{
-			Field: rtorrent.DDirectory,
-			Value: action.SavePath,
-		})
+		if action.ContentLayout == domain.ActionContentLayoutSubfolderNone {
+			args = append(args, &rtorrent.FieldValue{
+				Field: "d.directory_base",
+				Value: action.SavePath,
+			})
+		} else {
+			args = append(args, &rtorrent.FieldValue{
+				Field: rtorrent.DDirectory,
+				Value: action.SavePath,
+			})
+		}
 	}
 
-	if err := rt.AddTorrent(tmpFile, args...); err != nil {
-		return nil, errors.Wrap(err, "could not add torrent file: %v", release.TorrentTmpFile)
+	var addTorrentFile func(context.Context, []byte, ...*rtorrent.FieldValue) error
+	if action.Paused {
+		addTorrentFile = rt.AddTorrentStopped
+	} else {
+		addTorrentFile = rt.AddTorrent
 	}
 
-	s.log.Info().Msgf("torrent with hash %v successfully added to client: '%v'", "", client.Name)
+	if err := addTorrentFile(ctx, tmpFile, args...); err != nil {
+		return nil, errors.Wrap(err, "could not add torrent file: %s", release.TorrentTmpFile)
+	}
+
+	s.log.Info().Msgf("torrent successfully added to client: '%s'", client.Name)
 
 	return rejections, nil
 }
