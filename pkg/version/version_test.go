@@ -1,3 +1,6 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package version
 
 import (
@@ -7,6 +10,7 @@ import (
 )
 
 func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		Repo string
 	}
@@ -29,7 +33,7 @@ func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
 				version: "v0.2.0",
 				release: &Release{
 					TagName:         "v0.3.0",
-					TargetCommitish: nil,
+					TargetCommitish: "",
 				},
 			},
 			wantNew:     true,
@@ -43,7 +47,7 @@ func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
 				version: "v0.2.0",
 				release: &Release{
 					TagName:         "v0.2.0",
-					TargetCommitish: nil,
+					TargetCommitish: "",
 				},
 			},
 			wantNew:     false,
@@ -57,7 +61,7 @@ func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
 				version: "v0.3.0",
 				release: &Release{
 					TagName:         "v0.2.0",
-					TargetCommitish: nil,
+					TargetCommitish: "",
 				},
 			},
 			wantNew:     false,
@@ -71,7 +75,7 @@ func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
 				version: "v0.3.0",
 				release: &Release{
 					TagName:         "v0.3.0-rc1",
-					TargetCommitish: nil,
+					TargetCommitish: "",
 				},
 			},
 			wantNew:     false,
@@ -85,7 +89,7 @@ func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
 				version: "v0.3.0-RC1",
 				release: &Release{
 					TagName:         "v0.3.0-RC2",
-					TargetCommitish: nil,
+					TargetCommitish: "",
 				},
 			},
 			wantNew:     true,
@@ -109,6 +113,7 @@ func TestGitHubReleaseChecker_checkNewVersion(t *testing.T) {
 }
 
 func Test_isDevelop(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		version string

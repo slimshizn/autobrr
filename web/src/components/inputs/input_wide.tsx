@@ -1,19 +1,44 @@
-import type { FieldProps } from "formik";
-import { Field } from "formik";
-import { classNames } from "../../utils";
-import { useToggle } from "../../hooks/hooks";
+/*
+ * Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+import { JSX } from "react";
+import { Field as FormikField } from "formik";
+import Select from "react-select";
+import { Field, Label, Description } from "@headlessui/react";
+import type { FieldProps, FieldValidator } from "formik";
+
+import { classNames } from "@utils";
+import { useToggle } from "@hooks/hooks";
 import { EyeIcon, EyeSlashIcon } from "@heroicons/react/24/solid";
-import { Switch } from "@headlessui/react";
-import { ErrorField } from "./common";
+
+import { SelectFieldProps } from "./select";
+
+import { DocsTooltip } from "@components/tooltips/DocsTooltip";
+import { Checkbox } from "@components/Checkbox";
+import {
+  DropdownIndicator,
+  ErrorField, IndicatorSeparator,
+  RequiredField,
+  SelectControl,
+  SelectInput,
+  SelectMenu,
+  SelectOption
+} from "@components/inputs/common.tsx";
 
 interface TextFieldWideProps {
-    name: string;
-    label?: string;
-    help?: string;
-    placeholder?: string;
-    defaultValue?: string;
-    required?: boolean;
-    hidden?: boolean;
+  name: string;
+  label?: string;
+  help?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  required?: boolean;
+  disabled?: boolean;
+  autoComplete?: string;
+  hidden?: boolean;
+  tooltip?: JSX.Element;
+  validate?: FieldValidator;
 }
 
 export const TextFieldWide = ({
@@ -23,19 +48,30 @@ export const TextFieldWide = ({
   placeholder,
   defaultValue,
   required,
-  hidden
+  disabled,
+  autoComplete,
+  tooltip,
+  hidden,
+  validate
 }: TextFieldWideProps) => (
   <div hidden={hidden} className="space-y-1 p-4 sm:space-y-0 sm:grid sm:grid-cols-3 sm:gap-4">
     <div>
-      <label htmlFor={name} className="block text-sm font-medium text-gray-900 dark:text-white sm:mt-px sm:pt-2">
-        {label} {required && <span className="text-gray-500">*</span>}
+      <label htmlFor={name} className="flex ml-px text-sm font-medium text-gray-900 dark:text-white sm:mt-px sm:pt-2">
+        <div className="flex">
+          {tooltip ? (
+            <DocsTooltip label={label}>{tooltip}</DocsTooltip>
+          ) : label}
+          <RequiredField required={required} />
+        </div>
       </label>
     </div>
     <div className="sm:col-span-2">
-      <Field
+      <FormikField
         name={name}
         value={defaultValue}
         required={required}
+        validate={validate}
+        disabled={disabled}
       >
         {({ field, meta }: FieldProps) => (
           <input
@@ -44,12 +80,22 @@ export const TextFieldWide = ({
             type="text"
             value={field.value ? field.value : defaultValue ?? ""}
             onChange={field.onChange}
-            className={classNames(meta.touched && meta.error ? "focus:ring-red-500 focus:border-red-500 border-red-500" : "focus:ring-indigo-500 dark:focus:ring-blue-500 focus:border-indigo-500 dark:focus:border-blue-500 border-gray-300 dark:border-gray-700", "block w-full shadow-sm dark:bg-gray-800 sm:text-sm dark:text-white rounded-md")}
+            disabled={disabled}
+            className={classNames(
+              meta.touched && meta.error
+                ? "border-red-500 focus:ring-red-500 focus:border-red-500"
+                : "border-gray-300 dark:border-gray-700 focus:ring-blue-500 dark:focus:ring-blue-500 focus:border-blue-500 dark:focus:border-blue-500",
+              "block w-full shadow-xs sm:text-sm rounded-md border py-2.5 dark:text-gray-100",
+              disabled ? "bg-gray-200 dark:bg-gray-700" : "bg-gray-100 dark:bg-gray-850 "
+            )}
             placeholder={placeholder}
             hidden={hidden}
+            required={required}
+            autoComplete={autoComplete}
+            data-1p-ignore
           />
         )}
-      </Field>
+      </FormikField>
       {help && (
         <p className="mt-2 text-sm text-gray-500" id={`${name}-description`}>{help}</p>
       )}
@@ -59,13 +105,16 @@ export const TextFieldWide = ({
 );
 
 interface PasswordFieldWideProps {
-    name: string;
-    label?: string;
-    placeholder?: string;
-    defaultValue?: string;
-    help?: string;
-    required?: boolean;
-    defaultVisible?: boolean;
+  name: string;
+  label?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  help?: string;
+  required?: boolean;
+  autoComplete?: string;
+  defaultVisible?: boolean;
+  tooltip?: JSX.Element;
+  validate?: FieldValidator;
 }
 
 export const PasswordFieldWide = ({
@@ -75,21 +124,30 @@ export const PasswordFieldWide = ({
   defaultValue,
   help,
   required,
-  defaultVisible
+  autoComplete,
+  defaultVisible,
+  tooltip,
+  validate
 }: PasswordFieldWideProps) => {
   const [isVisible, toggleVisibility] = useToggle(defaultVisible);
 
   return (
     <div className="space-y-1 p-4 sm:space-y-0 sm:grid sm:grid-cols-3 sm:gap-4">
       <div>
-        <label htmlFor={name} className="block text-sm font-medium text-gray-900 dark:text-white sm:mt-px sm:pt-2">
-          {label} {required && <span className="text-gray-500">*</span>}
+        <label htmlFor={name} className="flex ml-px text-sm font-medium text-gray-900 dark:text-white sm:mt-px sm:pt-2">
+          <div className="flex">
+            {tooltip ? (
+              <DocsTooltip label={label}>{tooltip}</DocsTooltip>
+            ) : label}
+            <RequiredField required={required} />
+          </div>
         </label>
       </div>
       <div className="sm:col-span-2">
-        <Field
+        <FormikField
           name={name}
           defaultValue={defaultValue}
+          validate={validate}
         >
           {({ field, meta }: FieldProps) => (
             <div className="relative">
@@ -99,15 +157,23 @@ export const PasswordFieldWide = ({
                 value={field.value ? field.value : defaultValue ?? ""}
                 onChange={field.onChange}
                 type={isVisible ? "text" : "password"}
-                className={classNames(meta.touched && meta.error ? "focus:ring-red-500 focus:border-red-500 border-red-500" : "focus:ring-indigo-500 dark:focus:ring-blue-500 focus:border-indigo-500 dark:focus:border-blue-500 border-gray-300 dark:border-gray-700", "block w-full pr-10 dark:bg-gray-800 shadow-sm dark:text-gray-100 sm:text-sm rounded-md")}
+                className={classNames(
+                  meta.touched && meta.error
+                    ? "border-red-500 focus:ring-red-500 focus:border-red-500"
+                    : "border-gray-300 dark:border-gray-700 focus:ring-blue-500 dark:focus:ring-blue-500 focus:border-blue-500 dark:focus:border-blue-500",
+                  "block w-full shadow-xs sm:text-sm rounded-md border py-2.5 bg-gray-100 dark:bg-gray-850 dark:text-gray-100 overflow-hidden pr-8"
+                )}
                 placeholder={placeholder}
+                required={required}
+                autoComplete={autoComplete}
+                data-1p-ignore
               />
               <div className="absolute inset-y-0 right-0 px-3 flex items-center" onClick={toggleVisibility}>
                 {!isVisible ? <EyeIcon className="h-5 w-5 text-gray-400 hover:text-gray-500" aria-hidden="true" /> : <EyeSlashIcon className="h-5 w-5 text-gray-400 hover:text-gray-500" aria-hidden="true" />}
               </div>
             </div>
           )}
-        </Field>
+        </FormikField>
         {help && (
           <p className="mt-2 text-sm text-gray-500" id={`${name}-description`}>{help}</p>
         )}
@@ -118,12 +184,13 @@ export const PasswordFieldWide = ({
 };
 
 interface NumberFieldWideProps {
-    name: string;
-    label?: string;
-    help?: string;
-    placeholder?: string;
-    defaultValue?: number;
-    required?: boolean;
+  name: string;
+  label?: string;
+  help?: string;
+  placeholder?: string;
+  defaultValue?: number;
+  required?: boolean;
+  tooltip?: JSX.Element;
 }
 
 export const NumberFieldWide = ({
@@ -132,19 +199,25 @@ export const NumberFieldWide = ({
   placeholder,
   help,
   defaultValue,
+  tooltip,
   required
 }: NumberFieldWideProps) => (
   <div className="px-4 space-y-1 sm:space-y-0 sm:grid sm:grid-cols-3 sm:gap-4 sm:py-4">
     <div>
       <label
         htmlFor={name}
-        className="block text-sm font-medium text-gray-900 dark:text-white sm:mt-px sm:pt-2"
+        className="block ml-px text-sm font-medium text-gray-900 dark:text-white sm:mt-px sm:pt-2"
       >
-        {label} {required && <span className="text-gray-500">*</span>}
+        <div className="flex">
+          {tooltip ? (
+            <DocsTooltip label={label}>{tooltip}</DocsTooltip>
+          ) : label}
+          <RequiredField required={required} />
+        </div>
       </label>
     </div>
     <div className="sm:col-span-2">
-      <Field
+      <FormikField
         name={name}
         defaultValue={defaultValue ?? 0}
       >
@@ -157,14 +230,20 @@ export const NumberFieldWide = ({
             onChange={(e) => { form.setFieldValue(field.name, parseInt(e.target.value)); }}
             className={classNames(
               meta.touched && meta.error
-                ? "focus:ring-red-500 focus:border-red-500 border-red-500"
-                : "focus:ring-indigo-500 dark:focus:ring-blue-500 focus:border-indigo-500 dark:focus:border-blue-500 border-gray-300 dark:border-gray-700",
-              "block w-full shadow-sm dark:bg-gray-800 sm:text-sm dark:text-white rounded-md"
+                ? "border-red-500 focus:ring-red-500 focus:border-red-500"
+                : "border-gray-300 dark:border-gray-700 focus:ring-blue-500 dark:focus:ring-blue-500 focus:border-blue-500 dark:focus:border-blue-500",
+              "block w-full shadow-xs sm:text-sm rounded-md border py-2.5 bg-gray-100 dark:bg-gray-850 dark:text-gray-100"
             )}
+            onWheel={(event) => {
+              if (event.currentTarget === document.activeElement) {
+                event.currentTarget.blur();
+                setTimeout(() => event.currentTarget.focus(), 0);
+              }
+            }}
             placeholder={placeholder}
           />
         )}
-      </Field>
+      </FormikField>
       {help && (
         <p className="mt-2 text-sm text-gray-500 dark:text-gray-500" id={`${name}-description`}>{help}</p>
       )}
@@ -174,64 +253,127 @@ export const NumberFieldWide = ({
 );
 
 interface SwitchGroupWideProps {
-    name: string;
-    label: string;
-    description?: string;
-    defaultValue?: boolean;
-    className?: string;
+  name: string;
+  label: string;
+  description?: string;
+  defaultValue?: boolean;
+  className?: string;
+  tooltip?: JSX.Element;
 }
 
 export const SwitchGroupWide = ({
   name,
   label,
   description,
+  tooltip,
   defaultValue
 }: SwitchGroupWideProps) => (
-  <ul className="mt-2 px-4 divide-y divide-gray-200 dark:divide-gray-700">
-    <Switch.Group as="li" className="py-4 flex items-center justify-between">
+  <ul className="px-4 divide-y divide-gray-200 dark:divide-gray-700">
+    <Field as="li" className="py-4 flex items-center justify-between">
       <div className="flex flex-col">
-        <Switch.Label as="p" className="text-sm font-medium text-gray-900 dark:text-white"
-          passive>
-          {label}
-        </Switch.Label>
+        <Label as="div" passive className="text-sm font-medium text-gray-900 dark:text-white">
+          <div className="flex">
+            {tooltip ? (
+              <DocsTooltip label={label}>{tooltip}</DocsTooltip>
+            ) : label}
+          </div>
+        </Label>
         {description && (
-          <Switch.Description className="text-sm text-gray-500 dark:text-gray-700">
+          <Description className="text-sm text-gray-500 dark:text-gray-500">
             {description}
-          </Switch.Description>
+          </Description>
         )}
       </div>
 
-      <Field
+      <FormikField
         name={name}
         defaultValue={defaultValue as boolean}
         type="checkbox"
       >
-        {({ field, form }: FieldProps) => (
-          <Switch
+        {({
+          field,
+          form: { setFieldValue }
+        }: FieldProps) => (
+          <Checkbox
             {...field}
-            type="button"
-            value={field.value}
-            checked={field.checked ?? false}
-            onChange={(value: unknown) => {
-              form.setFieldValue(field?.name ?? "", value);
+            value={!!field.checked}
+            setValue={(value) => {
+              setFieldValue(field?.name ?? "", value);
             }}
-            className={classNames(
-              field.value ? "bg-teal-500 dark:bg-blue-500" : "bg-gray-200 dark:bg-gray-500",
-              "ml-4 relative inline-flex flex-shrink-0 h-6 w-11 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            )}
-          >
-            <span className="sr-only">Use setting</span>
-            <span
-              aria-hidden="true"
-              className={classNames(
-                field.value ? "translate-x-5" : "translate-x-0",
-                "inline-block h-5 w-5 rounded-full bg-white shadow transform ring-0 transition ease-in-out duration-200"
-              )}
-            />
-          </Switch>
+          />
         )}
-      </Field>
-    </Switch.Group>
+      </FormikField>
+    </Field>
   </ul>
 );
 
+export const SelectFieldWide = ({
+  name,
+  label,
+  optionDefaultText,
+  tooltip,
+  options
+}: SelectFieldProps) => (
+  <div className="flex items-center justify-between space-y-1 px-4 py-4 sm:space-y-0 sm:grid sm:grid-cols-3 sm:gap-4">
+    <div>
+      <label
+        htmlFor={name}
+        className="flex ml-px text-sm font-medium text-gray-900 dark:text-white"
+      >
+        <div className="flex">
+          {tooltip ? (
+            <DocsTooltip label={label}>{tooltip}</DocsTooltip>
+          ) : label}
+        </div>
+      </label>
+    </div>
+    <div className="sm:col-span-2">
+      <FormikField name={name} type="select">
+        {({
+          field,
+          form: { setFieldValue }
+        }: FieldProps) => (
+          <Select
+            {...field}
+            id={name}
+            isClearable={true}
+            isSearchable={true}
+            components={{
+              Input: SelectInput,
+              Control: SelectControl,
+              Menu: SelectMenu,
+              Option: SelectOption,
+              IndicatorSeparator: IndicatorSeparator,
+              DropdownIndicator: DropdownIndicator
+            }}
+            placeholder={optionDefaultText}
+            styles={{
+              singleValue: (base) => ({
+                ...base,
+                color: "unset"
+              })
+            }}
+            theme={(theme) => ({
+              ...theme,
+              spacing: {
+                ...theme.spacing,
+                controlHeight: 30,
+                baseUnit: 2
+              }
+            })}
+            value={field?.value && field.value.value}
+            onChange={(newValue: unknown) => {
+              if (newValue) {
+                setFieldValue(field.name, (newValue as { value: string }).value);
+              }
+              else {
+                setFieldValue(field.name, "")
+              }
+            }}
+            options={options}
+          />
+        )}
+      </FormikField>
+    </div>
+  </div>
+);

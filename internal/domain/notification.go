@@ -1,3 +1,6 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package domain
 
 import (
@@ -9,14 +12,15 @@ type NotificationRepo interface {
 	List(ctx context.Context) ([]Notification, error)
 	Find(ctx context.Context, params NotificationQueryParams) ([]Notification, int, error)
 	FindByID(ctx context.Context, id int) (*Notification, error)
-	Store(ctx context.Context, notification Notification) (*Notification, error)
-	Update(ctx context.Context, notification Notification) (*Notification, error)
+	Store(ctx context.Context, notification *Notification) error
+	Update(ctx context.Context, notification *Notification) error
 	Delete(ctx context.Context, notificationID int) error
 }
 
 type NotificationSender interface {
 	Send(event NotificationEvent, payload NotificationPayload) error
 	CanSend(event NotificationEvent) bool
+	Name() string
 }
 
 type Notification struct {
@@ -37,6 +41,8 @@ type Notification struct {
 	Rooms     string           `json:"rooms"`
 	Targets   string           `json:"targets"`
 	Devices   string           `json:"devices"`
+	Priority  int32            `json:"priority"`
+	Topic     string           `json:"topic"`
 	CreatedAt time.Time        `json:"created_at"`
 	UpdatedAt time.Time        `json:"updated_at"`
 }
@@ -55,9 +61,10 @@ type NotificationPayload struct {
 	ActionType     ActionType
 	ActionClient   string
 	Rejections     []string
-	Protocol       ReleaseProtocol       // torrent
+	Protocol       ReleaseProtocol       // torrent, usenet
 	Implementation ReleaseImplementation // irc, rss, api
 	Timestamp      time.Time
+	Sender         string
 }
 
 type NotificationType string
@@ -74,6 +81,10 @@ const (
 	NotificationTypeRocketChat NotificationType = "ROCKETCHAT"
 	NotificationTypeSlack      NotificationType = "SLACK"
 	NotificationTypeTelegram   NotificationType = "TELEGRAM"
+	NotificationTypeGotify     NotificationType = "GOTIFY"
+	NotificationTypeNtfy       NotificationType = "NTFY"
+	NotificationTypeLunaSea    NotificationType = "LUNASEA"
+	NotificationTypeShoutrrr   NotificationType = "SHOUTRRR"
 )
 
 type NotificationEvent string

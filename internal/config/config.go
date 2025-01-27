@@ -1,11 +1,16 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package config
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -41,8 +46,17 @@ port = 7474
 #
 #baseUrl = "/autobrr/"
 
+# Base url mode legacy
+# This is kept for compatibility with older versions doing url rewrite on the proxy.
+# If you use baseUrl you can set this to false and skip any url rewrite in your proxy.
+#
+# Default: true
+#
+baseUrlModeLegacy = true
+
 # autobrr logs file
 # If not defined, logs to stdout
+# Make sure to use forward slashes and include the filename with extension. eg: "log/autobrr.log", "C:/autobrr/log/autobrr.log"
 #
 # Optional
 #
@@ -56,12 +70,91 @@ port = 7474
 #
 logLevel = "DEBUG"
 
+# Log Max Size
+#
+# Default: 50
+#
+# Max log size in megabytes
+#
+#logMaxSize = 50
+
+# Log Max Backups
+#
+# Default: 3
+#
+# Max amount of old log files
+#
+#logMaxBackups = 3
+
+# Check for updates
+#
+checkForUpdates = true
+
 # Session secret
 #
 sessionSecret = "{{ .sessionSecret }}"
+
+# Database Max Backups
+#
+# Default: 5
+#
+#databaseMaxBackups = 5
+
+# Golang pprof profiling and tracing
+#
+#profilingEnabled = false
+#
+#profilingHost = "127.0.0.1"
+#
+# Default: 6060
+#profilingPort = 6060
+
+# OpenID Connect Configuration
+#
+# Enable OIDC authentication
+#oidcEnabled = false
+#
+# OIDC Issuer URL (e.g. https://auth.example.com)
+#oidcIssuer = ""
+#
+# OIDC Client ID
+#oidcClientId = ""
+#
+# OIDC Client Secret
+#oidcClientSecret = ""
+#
+# OIDC Redirect URL (e.g. http://localhost:7474/api/auth/oidc/callback)
+#oidcRedirectUrl = ""
+#
+# Disable Built In Login Form (only works when using external auth)
+#oidcDisableBuiltInLogin = false
+
+# Metrics
+#
+# Enable metrics endpoint
+#metricsEnabled = true
+#
+# Metrics server host
+#
+#metricsHost = "127.0.0.1"
+#
+# Metrics server port
+#
+#metricsPort = 9074
+#
+# Metrics basic auth
+#
+# Comma separate list of user:password. Password must be htpasswd bcrypt hashed. Use autobrrctl to generate.
+# Only enabled if correctly set with user:pass.
+#
+#metricsBasicAuthUsers = ""
+
+# Custom definitions
+#
+#customDefinitions = "test/definitions"
 `
 
-func writeConfig(configPath string, configFile string) error {
+func (c *AppConfig) writeConfig(configPath string, configFile string) error {
 	cfgPath := filepath.Join(configPath, configFile)
 
 	// check if configPath exists, if not create it
@@ -82,11 +175,31 @@ func writeConfig(configPath string, configFile string) error {
 			// docker creates a .dockerenv file at the root
 			// of the directory tree inside the container.
 			// if this file exists then the viewer is running
-			// from inside a container so return true
+			// from inside a docker container so return true
+			host = "0.0.0.0"
+		} else if _, err := os.Stat("/dev/.lxc-boot-id"); err == nil {
+			// lxc creates this file containing the uuid
+			// of the container in every boot.
+			// if this file exists then the viewer is running
+			// from inside a lxc container so return true
+			host = "0.0.0.0"
+		} else if os.Getpid() == 1 {
+			// if we're running as pid 1, we're honoured.
+			// but there's a good chance this is an isolated namespace
+			// or a container.
+			host = "0.0.0.0"
+		} else if user := os.Getenv("USERNAME"); user == "ContainerAdministrator" || user == "ContainerUser" {
+			/* this is the correct code below, but golang helpfully Panics when it can't find netapi32.dll
+			   the issue was first reported 7 years ago, but is fixed in go 1.24 where the below code works.
+			*/
+			/*
+				 u, err := user.Current(); err == nil && u != nil &&
+				(u.Name == "ContainerAdministrator" || u.Name == "ContainerUser") {
+				// Windows conatiners run containers as ContainerAdministrator by default */
 			host = "0.0.0.0"
 		} else if pd, _ := os.Open("/proc/1/cgroup"); pd != nil {
 			defer pd.Close()
-			b := make([]byte, 4096, 4096)
+			b := make([]byte, 4096)
 			pd.Read(b)
 			if strings.Contains(string(b), "/docker") || strings.Contains(string(b), "/lxc") {
 				host = "0.0.0.0"
@@ -101,9 +214,6 @@ func writeConfig(configPath string, configFile string) error {
 		}
 		defer f.Close()
 
-		// generate default sessionSecret
-		sessionSecret := api.GenerateSecureToken(16)
-
 		// setup text template to inject variables into
 		tmpl, err := template.New("config").Parse(configTemplate)
 		if err != nil {
@@ -112,7 +222,7 @@ func writeConfig(configPath string, configFile string) error {
 
 		tmplVars := map[string]string{
 			"host":          host,
-			"sessionSecret": sessionSecret,
+			"sessionSecret": c.Config.SessionSecret,
 		}
 
 		var buffer bytes.Buffer
@@ -132,51 +242,235 @@ func writeConfig(configPath string, configFile string) error {
 }
 
 type Config interface {
+	UpdateConfig() error
 	DynamicReload(log logger.Logger)
 }
 
 type AppConfig struct {
 	Config *domain.Config
-	m      sync.Mutex
+	m      *sync.Mutex
 }
 
 func New(configPath string, version string) *AppConfig {
-	c := &AppConfig{}
+	c := &AppConfig{
+		m: new(sync.Mutex),
+	}
 	c.defaults()
 	c.Config.Version = version
 	c.Config.ConfigPath = configPath
 
 	c.load(configPath)
+	c.loadFromEnv()
 
 	return c
 }
 
 func (c *AppConfig) defaults() {
 	c.Config = &domain.Config{
-		Version:           "dev",
-		Host:              "localhost",
-		Port:              7474,
-		LogLevel:          "TRACE",
-		LogPath:           "",
-		BaseURL:           "/",
-		SessionSecret:     "secret-session-key",
-		CustomDefinitions: "",
-		DatabaseType:      "sqlite",
-		PostgresHost:      "",
-		PostgresPort:      0,
-		PostgresDatabase:  "",
-		PostgresUser:      "",
-		PostgresPass:      "",
+		Version:               "dev",
+		Host:                  "localhost",
+		Port:                  7474,
+		LogLevel:              "TRACE",
+		LogPath:               "",
+		LogMaxSize:            50,
+		LogMaxBackups:         3,
+		DatabaseMaxBackups:    5,
+		BaseURL:               "/",
+		BaseURLModeLegacy:     true,
+		SessionSecret:         api.GenerateSecureToken(16),
+		CustomDefinitions:     "",
+		CheckForUpdates:       true,
+		DatabaseType:          "sqlite",
+		PostgresHost:          "",
+		PostgresPort:          0,
+		PostgresDatabase:      "",
+		PostgresUser:          "",
+		PostgresPass:          "",
+		PostgresSSLMode:       "disable",
+		PostgresExtraParams:   "",
+		ProfilingEnabled:      false,
+		ProfilingHost:         "127.0.0.1",
+		ProfilingPort:         6060,
+		MetricsEnabled:        false,
+		MetricsHost:           "127.0.0.1",
+		MetricsPort:           9074,
+		MetricsBasicAuthUsers: "",
+	}
+
+}
+
+func (c *AppConfig) loadFromEnv() {
+	prefix := "AUTOBRR__"
+
+	if v := os.Getenv(prefix + "HOST"); v != "" {
+		c.Config.Host = v
+	}
+
+	if v := os.Getenv(prefix + "PORT"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.Port = int(i)
+		}
+	}
+
+	if v := os.Getenv(prefix + "BASE_URL"); v != "" {
+		c.Config.BaseURL = v
+	}
+
+	if v := os.Getenv(prefix + "BASE_URL_MODE_LEGACY"); v != "" {
+		c.Config.BaseURLModeLegacy = strings.EqualFold(strings.ToLower(v), "true")
+	}
+
+	if v := os.Getenv(prefix + "LOG_LEVEL"); v != "" {
+		c.Config.LogLevel = v
+	}
+
+	if v := os.Getenv(prefix + "LOG_PATH"); v != "" {
+		c.Config.LogPath = v
+	}
+
+	if v := os.Getenv(prefix + "LOG_MAX_SIZE"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.LogMaxSize = int(i)
+		}
+	}
+
+	if v := os.Getenv(prefix + "LOG_MAX_BACKUPS"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.LogMaxBackups = int(i)
+		}
+	}
+
+	if v := os.Getenv(prefix + "SESSION_SECRET"); v != "" {
+		c.Config.SessionSecret = v
+	}
+
+	if v := os.Getenv(prefix + "CUSTOM_DEFINITIONS"); v != "" {
+		c.Config.CustomDefinitions = v
+	}
+
+	if v := os.Getenv(prefix + "CHECK_FOR_UPDATES"); v != "" {
+		c.Config.CheckForUpdates = strings.EqualFold(strings.ToLower(v), "true")
+	}
+
+	if v := os.Getenv(prefix + "DATABASE_TYPE"); v != "" {
+		if validDatabaseType(v) {
+			c.Config.DatabaseType = v
+		}
+	}
+
+	if v := os.Getenv(prefix + "DATABASE_MAX_BACKUPS"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.DatabaseMaxBackups = int(i)
+		}
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_HOST"); v != "" {
+		c.Config.PostgresHost = v
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_PORT"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.PostgresPort = int(i)
+		}
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_DATABASE"); v != "" {
+		c.Config.PostgresDatabase = v
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_USER"); v != "" {
+		c.Config.PostgresUser = v
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_PASS"); v != "" {
+		c.Config.PostgresPass = v
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_SSLMODE"); v != "" {
+		c.Config.PostgresSSLMode = v
+	}
+
+	if v := os.Getenv(prefix + "POSTGRES_EXTRA_PARAMS"); v != "" {
+		c.Config.PostgresExtraParams = v
+	}
+
+	if v := os.Getenv(prefix + "PROFILING_ENABLED"); v != "" {
+		c.Config.ProfilingEnabled = strings.EqualFold(strings.ToLower(v), "true")
+	}
+
+	if v := os.Getenv(prefix + "PROFILING_HOST"); v != "" {
+		c.Config.ProfilingHost = v
+	}
+
+	if v := os.Getenv(prefix + "PROFILING_PORT"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.ProfilingPort = int(i)
+		}
+	}
+
+	// OIDC Configuration
+	if v := os.Getenv(prefix + "OIDC_ENABLED"); v != "" {
+		c.Config.OIDCEnabled = strings.EqualFold(strings.ToLower(v), "true")
+	}
+
+	if v := os.Getenv(prefix + "OIDC_ISSUER"); v != "" {
+		c.Config.OIDCIssuer = v
+	}
+
+	if v := os.Getenv(prefix + "OIDC_CLIENT_ID"); v != "" {
+		c.Config.OIDCClientID = v
+	}
+
+	if v := os.Getenv(prefix + "OIDC_CLIENT_SECRET"); v != "" {
+		c.Config.OIDCClientSecret = v
+	}
+
+	if v := os.Getenv(prefix + "OIDC_REDIRECT_URL"); v != "" {
+		c.Config.OIDCRedirectURL = v
+	}
+
+	if v := os.Getenv(prefix + "OIDC_DISABLE_BUILT_IN_LOGIN"); v != "" {
+		c.Config.OIDCDisableBuiltInLogin = strings.EqualFold(strings.ToLower(v), "true")
+	}
+
+	if v := os.Getenv(prefix + "METRICS_ENABLED"); v != "" {
+		c.Config.MetricsEnabled = strings.EqualFold(strings.ToLower(v), "true")
+	}
+
+	if v := os.Getenv(prefix + "METRICS_HOST"); v != "" {
+		c.Config.MetricsHost = v
+	}
+
+	if v := os.Getenv(prefix + "METRICS_PORT"); v != "" {
+		i, _ := strconv.ParseInt(v, 10, 32)
+		if i > 0 {
+			c.Config.MetricsPort = int(i)
+		}
+	}
+
+	if v := os.Getenv(prefix + "METRICS_BASIC_AUTH_USERS"); v != "" {
+		c.Config.MetricsBasicAuthUsers = v
 	}
 }
 
-func (c *AppConfig) load(configPath string) {
-	// or use viper.SetDefault(val, def)
-	//viper.SetDefault("host", config.Host)
-	//viper.SetDefault("port", config.Port)
-	//viper.SetDefault("logLevel", config.LogLevel)
-	//viper.SetDefault("logPath", config.LogPath)
+func validDatabaseType(v string) bool {
+	valid := []string{"sqlite", "postgres"}
+	for _, s := range valid {
+		if s == v {
+			return true
+		}
+	}
 
+	return false
+}
+
+func (c *AppConfig) load(configPath string) {
 	viper.SetConfigType("toml")
 
 	// clean trailing slash from configPath
@@ -187,7 +481,7 @@ func (c *AppConfig) load(configPath string) {
 
 		// check if path and file exists
 		// if not, create path and file
-		if err := writeConfig(configPath, "config.toml"); err != nil {
+		if err := c.writeConfig(configPath, "config.toml"); err != nil {
 			log.Printf("write error: %q", err)
 		}
 
@@ -206,14 +500,16 @@ func (c *AppConfig) load(configPath string) {
 		log.Printf("config read error: %q", err)
 	}
 
-	if err := viper.Unmarshal(&c.Config); err != nil {
-		log.Fatalf("Could not unmarshal config file: %v", viper.ConfigFileUsed())
+	if err := viper.Unmarshal(c.Config); err != nil {
+		log.Fatalf("Could not unmarshal config file: %v: err %q", viper.ConfigFileUsed(), err)
 	}
 }
 
 func (c *AppConfig) DynamicReload(log logger.Logger) {
+	viper.WatchConfig()
 	viper.OnConfigChange(func(e fsnotify.Event) {
 		c.m.Lock()
+		defer c.m.Unlock()
 
 		logLevel := viper.GetString("logLevel")
 		c.Config.LogLevel = logLevel
@@ -222,11 +518,94 @@ func (c *AppConfig) DynamicReload(log logger.Logger) {
 		logPath := viper.GetString("logPath")
 		c.Config.LogPath = logPath
 
+		checkUpdates := viper.GetBool("checkForUpdates")
+		c.Config.CheckForUpdates = checkUpdates
+
 		log.Debug().Msg("config file reloaded!")
-
-		c.m.Unlock()
 	})
-	viper.WatchConfig()
+}
 
-	return
+func (c *AppConfig) UpdateConfig() error {
+	filePath := path.Join(c.Config.ConfigPath, "config.toml")
+
+	f, err := os.ReadFile(filePath)
+	if err != nil {
+		return errors.Wrap(err, "could not read config file: %s", filePath)
+	}
+
+	lines := strings.Split(string(f), "\n")
+	lines = c.processLines(lines)
+
+	output := strings.Join(lines, "\n")
+	if err := os.WriteFile(filePath, []byte(output), 0644); err != nil {
+		return errors.Wrap(err, "could not write config file: %s", filePath)
+	}
+
+	return nil
+}
+
+func (c *AppConfig) processLines(lines []string) []string {
+	// keep track of not found values to append at bottom
+	var (
+		foundLineUpdate   = false
+		foundLineLogLevel = false
+		foundLineLogPath  = false
+	)
+
+	for i, line := range lines {
+		// set checkForUpdates
+		if !foundLineUpdate && strings.Contains(line, "checkForUpdates =") {
+			lines[i] = fmt.Sprintf("checkForUpdates = %t", c.Config.CheckForUpdates)
+			foundLineUpdate = true
+		}
+		if !foundLineLogLevel && strings.Contains(line, "logLevel =") {
+			lines[i] = fmt.Sprintf(`logLevel = "%s"`, c.Config.LogLevel)
+			foundLineLogLevel = true
+		}
+		if !foundLineLogPath && strings.Contains(line, "logPath =") {
+			if c.Config.LogPath == "" {
+				// Check if the line already has a value
+				matches := strings.Split(line, "=")
+				if len(matches) > 1 && strings.TrimSpace(matches[1]) != `""` {
+					lines[i] = line // Preserve the existing line
+				} else {
+					lines[i] = `#logPath = ""`
+				}
+			} else {
+				lines[i] = fmt.Sprintf("logPath = \"%s\"", c.Config.LogPath)
+			}
+			foundLineLogPath = true
+		}
+	}
+
+	// append missing vars to bottom
+	if !foundLineUpdate {
+		lines = append(lines, "# Check for updates")
+		lines = append(lines, "#")
+		lines = append(lines, fmt.Sprintf("checkForUpdates = %t", c.Config.CheckForUpdates))
+	}
+
+	if !foundLineLogLevel {
+		lines = append(lines, "# Log level")
+		lines = append(lines, "#")
+		lines = append(lines, `# Default: "DEBUG"`)
+		lines = append(lines, "#")
+		lines = append(lines, `# Options: "ERROR", "DEBUG", "INFO", "WARN", "TRACE"`)
+		lines = append(lines, "#")
+		lines = append(lines, fmt.Sprintf(`logLevel = "%s"`, c.Config.LogLevel))
+	}
+
+	if !foundLineLogPath {
+		lines = append(lines, "# Log Path")
+		lines = append(lines, "#")
+		lines = append(lines, "# Optional")
+		lines = append(lines, "#")
+		if c.Config.LogPath == "" {
+			lines = append(lines, `#logPath = ""`)
+		} else {
+			lines = append(lines, fmt.Sprintf(`logPath = "%s"`, c.Config.LogPath))
+		}
+	}
+
+	return lines
 }
