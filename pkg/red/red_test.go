@@ -1,6 +1,12 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+//go:build integration
+
 package red
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/autobrr/autobrr/internal/domain"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
@@ -65,9 +72,11 @@ func TestREDClient_GetTorrentByID(t *testing.T) {
 			},
 			args: args{torrentID: "29991962"},
 			want: &domain.TorrentBasic{
-				Id:       "29991962",
-				InfoHash: "B2BABD3A361EAFC6C4E9142C422DF7DDF5D7E163",
-				Size:     "527749302",
+				Id:          "29991962",
+				InfoHash:    "B2BABD3A361EAFC6C4E9142C422DF7DDF5D7E163",
+				Size:        "527749302",
+				Uploader:    "Uploader",
+				RecordLabel: "FAJo Music",
 			},
 			wantErr: "",
 		},
@@ -79,7 +88,7 @@ func TestREDClient_GetTorrentByID(t *testing.T) {
 			},
 			args:    args{torrentID: "100002"},
 			want:    nil,
-			wantErr: "could not get torrent by id: 100002: bad id parameter",
+			wantErr: "could not get torrent by id: 100002: status code: 400 status: failure error: bad id parameter",
 		},
 		{
 			name: "get_by_id_3",
@@ -89,14 +98,14 @@ func TestREDClient_GetTorrentByID(t *testing.T) {
 			},
 			args:    args{torrentID: "100002"},
 			want:    nil,
-			wantErr: "could not get torrent by id: 100002: unauthorized: bad credentials",
+			wantErr: "could not get torrent by id: 100002: RED client missing API key!",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewClient(tt.fields.Url, tt.fields.APIKey)
+			c := NewClient(tt.fields.APIKey, WithUrl(ts.URL))
 
-			got, err := c.GetTorrentByID(tt.args.torrentID)
+			got, err := c.GetTorrentByID(context.Background(), tt.args.torrentID)
 			if tt.wantErr != "" && assert.Error(t, err) {
 				assert.EqualErrorf(t, err, tt.wantErr, "Error should be: %v, got: %v", tt.wantErr, err)
 			}

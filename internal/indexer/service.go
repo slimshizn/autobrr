@@ -1,6 +1,10 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package indexer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -13,7 +17,9 @@ import (
 	"github.com/autobrr/autobrr/internal/logger"
 	"github.com/autobrr/autobrr/internal/scheduler"
 	"github.com/autobrr/autobrr/pkg/errors"
+	"github.com/autobrr/autobrr/pkg/sanitize"
 
+	"github.com/asaskevich/EventBus"
 	"github.com/gosimple/slug"
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
@@ -26,20 +32,26 @@ type Service interface {
 	FindByFilterID(ctx context.Context, id int) ([]domain.Indexer, error)
 	FindByID(ctx context.Context, id int) (*domain.Indexer, error)
 	List(ctx context.Context) ([]domain.Indexer, error)
+	GetBy(ctx context.Context, req domain.GetIndexerRequest) (*domain.Indexer, error)
 	GetAll() ([]*domain.IndexerDefinition, error)
 	GetTemplates() ([]domain.IndexerDefinition, error)
 	LoadIndexerDefinitions() error
 	GetIndexersByIRCNetwork(server string) []*domain.IndexerDefinition
 	GetTorznabIndexers() []domain.IndexerDefinition
+	GetMappedDefinitionByName(name string) (*domain.IndexerDefinition, error)
 	Start() error
+	TestApi(ctx context.Context, req domain.IndexerTestApiRequest) error
+	ToggleEnabled(ctx context.Context, indexerID int, enabled bool) error
 }
 
 type service struct {
-	log        zerolog.Logger
-	config     *domain.Config
-	repo       domain.IndexerRepo
-	apiService APIService
-	scheduler  scheduler.Service
+	log         zerolog.Logger
+	config      *domain.Config
+	repo        domain.IndexerRepo
+	releaseRepo domain.ReleaseRepo
+	ApiService  APIService
+	scheduler   scheduler.Service
+	bus         EventBus.Bus
 
 	// contains all raw indexer definitions
 	definitions map[string]domain.IndexerDefinition
@@ -49,19 +61,24 @@ type service struct {
 	lookupIRCServerDefinition map[string]map[string]*domain.IndexerDefinition
 	// torznab indexers
 	torznabIndexers map[string]*domain.IndexerDefinition
+	// newznab indexers
+	newznabIndexers map[string]*domain.IndexerDefinition
 	// rss indexers
 	rssIndexers map[string]*domain.IndexerDefinition
 }
 
-func NewService(log logger.Logger, config *domain.Config, repo domain.IndexerRepo, apiService APIService, scheduler scheduler.Service) Service {
+func NewService(log logger.Logger, config *domain.Config, bus EventBus.Bus, repo domain.IndexerRepo, releaseRepo domain.ReleaseRepo, apiService APIService, scheduler scheduler.Service) Service {
 	return &service{
 		log:                       log.With().Str("module", "indexer").Logger(),
 		config:                    config,
 		repo:                      repo,
-		apiService:                apiService,
+		releaseRepo:               releaseRepo,
+		ApiService:                apiService,
 		scheduler:                 scheduler,
+		bus:                       bus,
 		lookupIRCServerDefinition: make(map[string]map[string]*domain.IndexerDefinition),
 		torznabIndexers:           make(map[string]*domain.IndexerDefinition),
+		newznabIndexers:           make(map[string]*domain.IndexerDefinition),
 		rssIndexers:               make(map[string]*domain.IndexerDefinition),
 		definitions:               make(map[string]domain.IndexerDefinition),
 		mappedDefinitions:         make(map[string]*domain.IndexerDefinition),
@@ -69,32 +86,35 @@ func NewService(log logger.Logger, config *domain.Config, repo domain.IndexerRep
 }
 
 func (s *service) Store(ctx context.Context, indexer domain.Indexer) (*domain.Indexer, error) {
-	identifier := indexer.Identifier
+	// sanitize user input
+	indexer.Name = sanitize.String(indexer.Name)
 
-	switch indexer.Implementation {
-	case "torznab":
-		// if the name already contains torznab remove it
-		cleanName := strings.ReplaceAll(strings.ToLower(indexer.Name), "torznab", "")
-		identifier = slug.Make(fmt.Sprintf("%v-%v", indexer.Implementation, cleanName)) // torznab-name
-
-	case "rss":
-		// if the name already contains rss remove it
-		cleanName := strings.ReplaceAll(strings.ToLower(indexer.Name), "rss", "")
-		identifier = slug.Make(fmt.Sprintf("%v-%v", indexer.Implementation, cleanName)) // rss-name
+	for key, val := range indexer.Settings {
+		indexer.Settings[key] = sanitize.String(val)
 	}
 
-	indexer.Identifier = identifier
+	// if indexer is rss or torznab do additional cleanup for identifier
+	if isImplFeed(indexer.Implementation) {
+		// make lowercase
+		cleanName := strings.ToLower(indexer.Name)
+
+		// torznab-name OR rss-name
+		indexer.Identifier = slug.Make(fmt.Sprintf("%s-%s", indexer.Implementation, cleanName))
+	}
+
+	if indexer.IdentifierExternal == "" {
+		indexer.IdentifierExternal = indexer.Name
+	}
 
 	i, err := s.repo.Store(ctx, indexer)
 	if err != nil {
-		s.log.Error().Stack().Err(err).Msgf("failed to store indexer: %v", indexer.Name)
+		s.log.Error().Err(err).Msgf("failed to store indexer: %s", indexer.Name)
 		return nil, err
 	}
 
 	// add to indexerInstances
-	err = s.addIndexer(*i)
-	if err != nil {
-		s.log.Error().Stack().Err(err).Msgf("failed to add indexer: %v", indexer.Name)
+	if err = s.addIndexer(*i); err != nil {
+		s.log.Error().Err(err).Msgf("failed to add indexer: %s", indexer.Name)
 		return nil, err
 	}
 
@@ -102,6 +122,35 @@ func (s *service) Store(ctx context.Context, indexer domain.Indexer) (*domain.In
 }
 
 func (s *service) Update(ctx context.Context, indexer domain.Indexer) (*domain.Indexer, error) {
+	// sanitize user input
+	indexer.Name = sanitize.String(indexer.Name)
+
+	for key, val := range indexer.Settings {
+		indexer.Settings[key] = sanitize.String(val)
+	}
+
+	currentIndexer, err := s.repo.FindByID(ctx, int(indexer.ID))
+	if err != nil {
+		return nil, errors.Wrap(err, "could not find indexer by id: %v", indexer.ID)
+	}
+
+	// only IRC indexers have baseURL set
+	if indexer.Implementation == string(domain.IndexerImplementationIRC) {
+		if indexer.BaseURL == "" {
+			return nil, errors.New("indexer baseURL must not be empty")
+		}
+
+		// check if baseURL has been updated and update releases if it was
+		if currentIndexer.BaseURL != indexer.BaseURL {
+
+			// update urls of releases
+			err = s.releaseRepo.UpdateBaseURL(ctx, indexer.Identifier, currentIndexer.BaseURL, indexer.BaseURL)
+			if err != nil {
+				return nil, errors.Wrap(err, "could not update release urls with new baseURL: %s", indexer.BaseURL)
+			}
+		}
+	}
+
 	i, err := s.repo.Update(ctx, indexer)
 	if err != nil {
 		s.log.Error().Err(err).Msgf("could not update indexer: %+v", indexer)
@@ -109,19 +158,18 @@ func (s *service) Update(ctx context.Context, indexer domain.Indexer) (*domain.I
 	}
 
 	// add to indexerInstances
-	err = s.updateIndexer(*i)
-	if err != nil {
-		s.log.Error().Err(err).Msgf("failed to add indexer: %v", indexer.Name)
+	if err = s.updateIndexer(*i); err != nil {
+		s.log.Error().Err(err).Msgf("failed to add indexer: %s", indexer.Name)
 		return nil, err
 	}
 
-	if indexer.Implementation == "torznab" || indexer.Implementation == "rss" {
-		if !indexer.Enabled {
+	if isImplFeed(indexer.Implementation) {
+		if currentIndexer.Enabled && !indexer.Enabled {
 			s.stopFeed(indexer.Identifier)
 		}
 	}
 
-	s.log.Debug().Msgf("successfully updated indexer: %v", indexer.Name)
+	s.log.Debug().Msgf("successfully updated indexer: %s", indexer.Name)
 
 	return i, nil
 }
@@ -133,12 +181,18 @@ func (s *service) Delete(ctx context.Context, id int) error {
 	}
 
 	if err := s.repo.Delete(ctx, id); err != nil {
-		s.log.Error().Err(err).Msgf("could not delete indexer by id: %v", id)
+		s.log.Error().Err(err).Msgf("could not delete indexer by id: %d", id)
 		return err
 	}
 
 	// remove from lookup tables
 	s.removeIndexer(*indexer)
+
+	if err := s.ApiService.RemoveClient(indexer.Identifier); err != nil {
+		s.log.Error().Err(err).Msgf("could not delete indexer api client: %s", indexer.Identifier)
+	}
+
+	s.bus.Publish(domain.EventIndexerDelete, indexer)
 
 	return nil
 }
@@ -146,7 +200,7 @@ func (s *service) Delete(ctx context.Context, id int) error {
 func (s *service) FindByFilterID(ctx context.Context, id int) ([]domain.Indexer, error) {
 	indexers, err := s.repo.FindByFilterID(ctx, id)
 	if err != nil {
-		s.log.Error().Err(err).Msgf("could not find indexers by filter id: %v", id)
+		s.log.Error().Err(err).Msgf("could not find indexers by filter id: %d", id)
 		return nil, err
 	}
 
@@ -156,7 +210,7 @@ func (s *service) FindByFilterID(ctx context.Context, id int) ([]domain.Indexer,
 func (s *service) FindByID(ctx context.Context, id int) (*domain.Indexer, error) {
 	indexers, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		s.log.Error().Err(err).Msgf("could not find indexer by id: %v", id)
+		s.log.Error().Err(err).Msgf("could not find indexer by id: %d", id)
 		return nil, err
 	}
 
@@ -171,6 +225,16 @@ func (s *service) List(ctx context.Context) ([]domain.Indexer, error) {
 	}
 
 	return indexers, err
+}
+
+func (s *service) GetBy(ctx context.Context, req domain.GetIndexerRequest) (*domain.Indexer, error) {
+	indexer, err := s.repo.GetBy(ctx, req)
+	if err != nil {
+		s.log.Error().Err(err).Msgf("could not get indexer by: %v", req)
+		return nil, err
+	}
+
+	return indexer, err
 }
 
 func (s *service) GetAll() ([]*domain.IndexerDefinition, error) {
@@ -217,10 +281,9 @@ func (s *service) mapIndexers() (map[string]*domain.IndexerDefinition, error) {
 
 func (s *service) mapIndexer(indexer domain.Indexer) (*domain.IndexerDefinition, error) {
 	definitionName := indexer.Identifier
-	if indexer.Implementation == "torznab" {
-		definitionName = "torznab"
-	} else if indexer.Implementation == "rss" {
-		definitionName = "rss"
+
+	if isImplFeed(indexer.Implementation) {
+		definitionName = indexer.Implementation
 	}
 
 	d := s.getDefinitionByName(definitionName)
@@ -232,8 +295,13 @@ func (s *service) mapIndexer(indexer domain.Indexer) (*domain.IndexerDefinition,
 	d.ID = int(indexer.ID)
 	d.Name = indexer.Name
 	d.Identifier = indexer.Identifier
+	d.IdentifierExternal = indexer.IdentifierExternal
 	d.Implementation = indexer.Implementation
+	d.BaseURL = indexer.BaseURL
 	d.Enabled = indexer.Enabled
+
+	d.UseProxy = indexer.UseProxy
+	d.ProxyID = indexer.ProxyID
 
 	if d.SettingsMap == nil {
 		d.SettingsMap = make(map[string]string)
@@ -267,8 +335,13 @@ func (s *service) updateMapIndexer(indexer domain.Indexer) (*domain.IndexerDefin
 	d.ID = int(indexer.ID)
 	d.Name = indexer.Name
 	d.Identifier = indexer.Identifier
+	d.IdentifierExternal = indexer.IdentifierExternal
 	d.Implementation = indexer.Implementation
+	d.BaseURL = indexer.BaseURL
 	d.Enabled = indexer.Enabled
+
+	d.UseProxy = indexer.UseProxy
+	d.ProxyID = indexer.ProxyID
 
 	if d.SettingsMap == nil {
 		d.SettingsMap = make(map[string]string)
@@ -306,16 +379,14 @@ func (s *service) GetTemplates() ([]domain.IndexerDefinition, error) {
 
 func (s *service) Start() error {
 	// load all indexer definitions
-	err := s.LoadIndexerDefinitions()
-	if err != nil {
+	if err := s.LoadIndexerDefinitions(); err != nil {
 		s.log.Error().Err(err).Msg("could not load indexer definitions")
 		return err
 	}
 
 	if s.config.CustomDefinitions != "" {
 		// load custom indexer definitions
-		err = s.LoadCustomIndexerDefinitions()
-		if err != nil {
+		if err := s.LoadCustomIndexerDefinitions(); err != nil {
 			return errors.Wrap(err, "could not load custom indexer definitions")
 		}
 	}
@@ -327,23 +398,27 @@ func (s *service) Start() error {
 	}
 
 	for _, indexer := range indexerDefinitions {
-		if indexer.IRC != nil {
+		switch indexer.Implementation {
+		case string(domain.IndexerImplementationIRC):
 			// add to irc server lookup table
 			s.mapIRCServerDefinitionLookup(indexer.IRC.Server, indexer)
 
 			// check if it has api and add to api service
 			if indexer.Enabled && indexer.HasApi() {
-				if err := s.apiService.AddClient(indexer.Identifier, indexer.SettingsMap); err != nil {
-					s.log.Error().Stack().Err(err).Msgf("indexer.start: could not init api client for: '%v'", indexer.Identifier)
+				if err := s.ApiService.AddClient(indexer.Identifier, indexer.SettingsMap); err != nil {
+					s.log.Error().Stack().Err(err).Msgf("indexer.start: could not init api client for: '%s'", indexer.Identifier)
 				}
 			}
-		}
 
-		// handle Torznab
-		if indexer.Implementation == "torznab" {
-			s.torznabIndexers[indexer.Identifier] = indexer
-		} else if indexer.Implementation == "rss" {
+		// handle feeds
+		case string(domain.IndexerImplementationRSS):
 			s.rssIndexers[indexer.Identifier] = indexer
+
+		case string(domain.IndexerImplementationTorznab):
+			s.torznabIndexers[indexer.Identifier] = indexer
+
+		case string(domain.IndexerImplementationNewznab):
+			s.newznabIndexers[indexer.Identifier] = indexer
 		}
 	}
 
@@ -353,17 +428,20 @@ func (s *service) Start() error {
 }
 
 func (s *service) removeIndexer(indexer domain.Indexer) {
-	// remove Torznab
-	if indexer.Implementation == "torznab" {
-		delete(s.torznabIndexers, indexer.Identifier)
-	} else if indexer.Implementation == "rss" {
+	// handle feeds
+	switch indexer.Implementation {
+	case string(domain.IndexerImplementationRSS):
 		delete(s.rssIndexers, indexer.Identifier)
+
+	case string(domain.IndexerImplementationTorznab):
+		delete(s.torznabIndexers, indexer.Identifier)
+
+	case string(domain.IndexerImplementationNewznab):
+		delete(s.newznabIndexers, indexer.Identifier)
 	}
 
 	// remove mapped definition
 	delete(s.mappedDefinitions, indexer.Identifier)
-
-	return
 }
 
 func (s *service) addIndexer(indexer domain.Indexer) error {
@@ -376,23 +454,27 @@ func (s *service) addIndexer(indexer domain.Indexer) error {
 		return errors.New("addindexer: could not find definition")
 	}
 
-	if indexerDefinition.IRC != nil {
+	switch indexer.Implementation {
+	case string(domain.IndexerImplementationIRC):
 		// add to irc server lookup table
 		s.mapIRCServerDefinitionLookup(indexerDefinition.IRC.Server, indexerDefinition)
 
 		// check if it has api and add to api service
-		if indexerDefinition.Enabled && indexerDefinition.HasApi() {
-			if err := s.apiService.AddClient(indexerDefinition.Identifier, indexerDefinition.SettingsMap); err != nil {
-				s.log.Error().Stack().Err(err).Msgf("indexer.start: could not init api client for: '%v'", indexer.Identifier)
+		if indexerDefinition.HasApi() {
+			if err := s.ApiService.AddClient(indexerDefinition.Identifier, indexerDefinition.SettingsMap); err != nil {
+				s.log.Error().Stack().Err(err).Msgf("indexer.start: could not init api client for: '%s'", indexer.Identifier)
 			}
 		}
-	}
 
-	// handle Torznab and RSS
-	if indexerDefinition.Implementation == "torznab" {
-		s.torznabIndexers[indexer.Identifier] = indexerDefinition
-	} else if indexerDefinition.Implementation == "rss" {
+	// handle feeds
+	case string(domain.IndexerImplementationRSS):
 		s.rssIndexers[indexer.Identifier] = indexerDefinition
+
+	case string(domain.IndexerImplementationTorznab):
+		s.torznabIndexers[indexer.Identifier] = indexerDefinition
+
+	case string(domain.IndexerImplementationNewznab):
+		s.newznabIndexers[indexer.Identifier] = indexerDefinition
 	}
 
 	s.mappedDefinitions[indexer.Identifier] = indexerDefinition
@@ -410,23 +492,27 @@ func (s *service) updateIndexer(indexer domain.Indexer) error {
 		return errors.New("update indexer: could not find definition")
 	}
 
-	if indexerDefinition.IRC != nil {
+	switch indexer.Implementation {
+	case string(domain.IndexerImplementationIRC):
 		// add to irc server lookup table
 		s.mapIRCServerDefinitionLookup(indexerDefinition.IRC.Server, indexerDefinition)
 
 		// check if it has api and add to api service
-		if indexerDefinition.Enabled && indexerDefinition.HasApi() {
-			if err := s.apiService.AddClient(indexerDefinition.Identifier, indexerDefinition.SettingsMap); err != nil {
-				s.log.Error().Stack().Err(err).Msgf("indexer.start: could not init api client for: '%v'", indexer.Identifier)
+		if indexerDefinition.HasApi() {
+			if err := s.ApiService.AddClient(indexerDefinition.Identifier, indexerDefinition.SettingsMap); err != nil {
+				s.log.Error().Stack().Err(err).Msgf("indexer.start: could not init api client for: '%s'", indexer.Identifier)
 			}
 		}
-	}
 
-	// handle Torznab
-	if indexerDefinition.Implementation == "torznab" {
-		s.torznabIndexers[indexer.Identifier] = indexerDefinition
-	} else if indexerDefinition.Implementation == "rss" {
+	// handle feeds
+	case string(domain.IndexerImplementationRSS):
 		s.rssIndexers[indexer.Identifier] = indexerDefinition
+
+	case string(domain.IndexerImplementationTorznab):
+		s.torznabIndexers[indexer.Identifier] = indexerDefinition
+
+	case string(domain.IndexerImplementationNewznab):
+		s.newznabIndexers[indexer.Identifier] = indexerDefinition
 	}
 
 	s.mappedDefinitions[indexer.Identifier] = indexerDefinition
@@ -469,32 +555,73 @@ func (s *service) LoadIndexerDefinitions() error {
 
 		file := "definitions/" + f.Name()
 
-		s.log.Trace().Msgf("parsing: %v", file)
-
-		var d *domain.IndexerDefinition
+		s.log.Trace().Msgf("parsing: %s", file)
 
 		data, err := fs.ReadFile(Definitions, file)
 		if err != nil {
-			s.log.Error().Stack().Err(err).Msgf("failed reading file: %v", file)
-			return errors.Wrap(err, "could not read file: %v", file)
+			s.log.Error().Stack().Err(err).Msgf("failed reading file: %s", file)
+			return errors.Wrap(err, "could not read file: %s", file)
 		}
 
-		err = yaml.Unmarshal(data, &d)
-		if err != nil {
-			s.log.Error().Stack().Err(err).Msgf("failed unmarshal file: %v", file)
-			return errors.Wrap(err, "could not unmarshal file: %v", file)
+		var d domain.IndexerDefinition
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+
+		if err = dec.Decode(&d); err != nil {
+			s.log.Error().Stack().Err(err).Msgf("failed unmarshal file: %s", file)
+			return errors.Wrap(err, "could not unmarshal file: %s", file)
 		}
 
 		if d.Implementation == "" {
 			d.Implementation = "irc"
 		}
 
-		s.definitions[d.Identifier] = *d
+		s.definitions[d.Identifier] = d
 	}
 
 	s.log.Debug().Msgf("Loaded %d indexer definitions", len(s.definitions))
 
 	return nil
+}
+
+var ErrIndexerDefinitionDeprecated = errors.New("DEPRECATED: indexer definition version")
+
+func isValidExtension(ext string) bool {
+	return ext == ".yaml" || ext == ".yml"
+}
+
+func OpenAndProcessDefinition(file string) (*domain.IndexerDefinition, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not open file: %s", file)
+	}
+	defer f.Close()
+
+	var d *domain.IndexerDefinitionCustom
+
+	dec := yaml.NewDecoder(f)
+	dec.KnownFields(false)
+
+	if err = dec.Decode(&d); err != nil {
+		return nil, errors.Wrap(err, "could not decode definition file: %s", file)
+	}
+
+	if d == nil {
+		//s.log.Warn().Msgf("skipping empty file: %s", file)
+		return nil, errors.New("empty definition file")
+	}
+
+	if d.Implementation == "" {
+		d.Implementation = "irc"
+	}
+
+	//if d.Implementation == "irc" && d.IRC != nil {
+	//	if d.IRC.Parse == nil {
+	//		s.log.Warn().Msgf("DEPRECATED: indexer definition version: %s", file)
+	//	}
+	//}
+
+	return d.ToIndexerDefinition(), nil
 }
 
 // LoadCustomIndexerDefinitions load definitions from custom path
@@ -505,7 +632,7 @@ func (s *service) LoadCustomIndexerDefinitions() error {
 
 	outputDirRead, err := os.Open(s.config.CustomDefinitions)
 	if err != nil {
-		s.log.Warn().Stack().Msgf("failed opening custom definitions directory %q: %s", s.config.CustomDefinitions, err)
+		s.log.Error().Err(err).Msgf("failed opening custom definitions directory %s", s.config.CustomDefinitions)
 		return nil
 	}
 
@@ -520,39 +647,23 @@ func (s *service) LoadCustomIndexerDefinitions() error {
 	customCount := 0
 
 	for _, f := range entries {
-		fileExtension := filepath.Ext(f.Name())
-		if fileExtension != ".yaml" && fileExtension != ".yml" {
-			s.log.Warn().Stack().Msgf("skipping unknown extension definition file: %s", f.Name())
+		ext := filepath.Ext(f.Name())
+		if !isValidExtension(ext) {
+			s.log.Warn().Msgf("unsupported extension %s, definition file: %s", ext, f.Name())
 			continue
 		}
 
 		file := filepath.Join(s.config.CustomDefinitions, f.Name())
 
-		s.log.Trace().Msgf("parsing custom: %v", file)
+		s.log.Trace().Msgf("parsing custom definition: %s", file)
 
-		//data, err := fs.ReadFile(Definitions, filePath)
-		data, err := os.ReadFile(file)
+		definition, err := OpenAndProcessDefinition(file)
 		if err != nil {
-			s.log.Error().Stack().Err(err).Msgf("failed reading file: %v", file)
-			return errors.Wrap(err, "could not read file: %v", file)
-		}
-
-		var d *domain.IndexerDefinition
-		if err = yaml.Unmarshal(data, &d); err != nil {
-			s.log.Error().Stack().Err(err).Msgf("failed unmarshal file: %v", file)
-			return errors.Wrap(err, "could not unmarshal file: %v", file)
-		}
-
-		if d == nil {
-			s.log.Warn().Stack().Err(err).Msgf("skipping empty file: %v", file)
+			s.log.Error().Err(err).Msgf("could not open definition file: %s", file)
 			continue
 		}
 
-		if d.Implementation == "" {
-			d.Implementation = "irc"
-		}
-
-		s.definitions[d.Identifier] = *d
+		s.definitions[definition.Identifier] = *definition
 
 		customCount++
 	}
@@ -609,6 +720,23 @@ func (s *service) getDefinitionByName(name string) *domain.IndexerDefinition {
 	return nil
 }
 
+func (s *service) GetMappedDefinitionByName(name string) (*domain.IndexerDefinition, error) {
+	v, ok := s.mappedDefinitions[name]
+	if !ok {
+		return nil, errors.New("unknown indexer identifier: %s", name)
+	}
+
+	return v, nil
+}
+
+func (s *service) getMappedDefinitionByName(name string) *domain.IndexerDefinition {
+	if v, ok := s.mappedDefinitions[name]; ok {
+		return v
+	}
+
+	return nil
+}
+
 func (s *service) stopFeed(indexer string) {
 	// verify indexer is torznab indexer
 	_, ok := s.torznabIndexers[indexer]
@@ -622,5 +750,71 @@ func (s *service) stopFeed(indexer string) {
 
 	if err := s.scheduler.RemoveJobByIdentifier(indexer); err != nil {
 		return
+	}
+}
+
+func (s *service) TestApi(ctx context.Context, req domain.IndexerTestApiRequest) error {
+	indexer, err := s.FindByID(ctx, req.IndexerId)
+	if err != nil {
+		return err
+	}
+
+	def := s.getMappedDefinitionByName(indexer.Identifier)
+	if def == nil {
+		return errors.New("could not find definition: %s", indexer.Identifier)
+	}
+
+	if !def.HasApi() {
+		return errors.New("indexer (%s) does not support api", indexer.Identifier)
+	}
+
+	req.Identifier = def.Identifier
+
+	if _, err = s.ApiService.TestConnection(ctx, req); err != nil {
+		s.log.Error().Err(err).Msgf("error testing api for: %s", indexer.Identifier)
+		return err
+	}
+
+	s.log.Info().Msgf("successful api test for: %s", indexer.Identifier)
+
+	return nil
+}
+
+func (s *service) ToggleEnabled(ctx context.Context, indexerID int, enabled bool) error {
+	indexer, err := s.FindByID(ctx, indexerID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.repo.ToggleEnabled(ctx, int(indexer.ID), enabled); err != nil {
+		s.log.Error().Err(err).Msg("could not update indexer enabled")
+		return err
+	}
+
+	indexer.Enabled = enabled
+
+	// update indexerInstances
+	if err := s.updateIndexer(*indexer); err != nil {
+		s.log.Error().Err(err).Msgf("failed to add indexer: %s", indexer.Name)
+		return err
+	}
+
+	if isImplFeed(indexer.Implementation) {
+		if !indexer.Enabled {
+			s.stopFeed(indexer.Identifier)
+		}
+	}
+
+	s.log.Debug().Msgf("indexer.toggle_enabled: update indexer '%d' to '%v'", indexerID, enabled)
+
+	return nil
+}
+
+func isImplFeed(implementation string) bool {
+	switch implementation {
+	case "torznab", "newznab", "rss":
+		return true
+	default:
+		return false
 	}
 }

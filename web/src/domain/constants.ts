@@ -1,43 +1,67 @@
-import { MultiSelectOption } from "../components/inputs/select";
+/*
+ * Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+import { MultiSelectOption } from "@components/inputs/select";
+
+export const AnnounceTypeOptions: MultiSelectOption[] = [
+  {
+    label: "New",
+    value: "NEW"
+  },
+  {
+    label: "Checked",
+    value: "CHECKED"
+  },
+  {
+    label: "Promo",
+    value: "PROMO"
+  },
+  {
+    label: "Promo GP",
+    value: "PROMO_GP"
+  },
+  {
+    label: "Resurrected",
+    value: "RESURRECTED"
+  }
+];
 
 export const resolutions = [
   "2160p",
   "1080p",
-  "1080i",
   "810p",
   "720p",
   "576p",
   "480p",
-  "480i"
 ];
 
 export const RESOLUTION_OPTIONS: MultiSelectOption[] = resolutions.map(r => ({ value: r, label: r, key: r }));
 
 export const codecs = [
-  "HEVC",
+  "AV1",
+  "AVC",
   "H.264",
   "H.265",
-  "x264",
-  "x265",
-  "AVC",
+  "HEVC",
+  "MPEG-2",
   "VC-1",
-  "AV1",
-  "XviD"
+  "XviD",
+  "x264",
+  "x265"
 ];
 
 export const CODECS_OPTIONS: MultiSelectOption[] = codecs.map(v => ({ value: v, label: v, key: v }));
 
 export const sources = [
-  "BluRay",
-  "UHD.BluRay",
-  "WEB-DL",
-  "WEB",
-  "WEBRip",
+  "AHDTV",
   "BD5",
   "BD9",
-  "BDr",
   "BDRip",
+  "BDr",
   "BRRip",
+  "BluRay",
   "CAM",
   "DVDR",
   "DVDRip",
@@ -48,7 +72,11 @@ export const sources = [
   "HDTS",
   "HDTV",
   "Mixed",
-  "SiteRip"
+  "SiteRip",
+  "UHD.BluRay",
+  "WEB",
+  "WEB-DL",
+  "WEBRip"
 ];
 
 export const SOURCES_OPTIONS: MultiSelectOption[] = sources.map(v => ({ value: v, label: v, key: v }));
@@ -127,23 +155,28 @@ export const QUALITY_MUSIC_OPTIONS: MultiSelectOption[] = qualityMusic.map(v => 
 
 export const releaseTypeMusic = [
   "Album",
-  "Single",
-  "EP",
-  "Soundtrack",
   "Anthology",
-  "Compilation",
-  "Live album",
-  "Remix",
   "Bootleg",
-  "Interview",
-  "Mixtape",
-  "Demo",
+  "Compilation",
   "Concert Recording",
+  "Demo",
   "DJ Mix",
+  "EP",
+  "Interview",
+  "Live album",
+  "Mixtape",
+  "Remix",
+  "Sampler",
+  "Single",
+  "Soundtrack",
   "Unknown"
 ];
 
-export const RELEASE_TYPE_MUSIC_OPTIONS: MultiSelectOption[] = releaseTypeMusic.map(v => ({ value: v, label: v, key: v }));
+export const RELEASE_TYPE_MUSIC_OPTIONS: MultiSelectOption[] = releaseTypeMusic.map(v => ({
+  value: v,
+  label: v,
+  key: v
+}));
 
 export const originOptions = [
   "P2P",
@@ -154,10 +187,67 @@ export const originOptions = [
 
 export const ORIGIN_OPTIONS = originOptions.map(v => ({ value: v, label: v, key: v }));
 
+export const languageOptions = [
+  "BALTIC",
+  "BRAZiLiAN",
+  "BULGARiAN",
+  "CHiNESE",
+  "CHS",
+  "CHT",
+  "CZECH",
+  "DANiSH",
+  "DUBBED",
+  "DKSUBS",
+  "DUTCH",
+  "ENGLiSH",
+  "ESTONiAN",
+  "FLEMiSH",
+  "FiNNiSH",
+  "FRENCH",
+  "GERMAN",
+  "GREEK",
+  "HAiTiAN",
+  "HARDSUB",
+  "Hardcoded",
+  "HEBREW",
+  "HebSub",
+  "HiNDi",
+  "HUNGARiAN",
+  "iCELANDiC",
+  "iTALiAN",
+  "JAPANESE",
+  "KOREAN",
+  "LATiN",
+  "MANDARiN",
+  "MULTi",
+  "MULTILANG",
+  "MULTiSUB",
+  "MULTiSUBS",
+  "NORDiC",
+  "NORWEGiAN",
+  "POLiSH",
+  "PORTUGUESE",
+  "ROMANiAN",
+  "RUSSiAN",
+  "SLOVAK",
+  "SPANiSH",
+  "SUBBED",
+  "SUBFORCED",
+  "SUBPACK",
+  "SWEDiSH",
+  "SYNCED",
+  "TURKiSH",
+  "UKRAiNiAN",
+  "UNSUBBED"
+];
+
+export const LANGUAGE_OPTIONS = languageOptions.map(v => ({ value: v, label: v, key: v }));
+
 export interface RadioFieldsetOption {
-    label: string;
-    description: string;
-    value: ActionType;
+  label: string;
+  description: string;
+  value: ActionType;
+  type?: string;
 }
 
 export const DownloadClientTypeOptions: RadioFieldsetOption[] = [
@@ -187,6 +277,11 @@ export const DownloadClientTypeOptions: RadioFieldsetOption[] = [
     value: "TRANSMISSION"
   },
   {
+    label: "Porla",
+    description: "Add torrents directly to Porla",
+    value: "PORLA"
+  },
+  {
     label: "Radarr",
     description: "Send to Radarr and let it decide",
     value: "RADARR"
@@ -205,20 +300,19 @@ export const DownloadClientTypeOptions: RadioFieldsetOption[] = [
     label: "Whisparr",
     description: "Send to Whisparr and let it decide",
     value: "WHISPARR"
+  },
+  {
+    label: "Readarr",
+    description: "Send to Readarr and let it decide",
+    value: "READARR"
+  },
+  {
+    label: "SABnzbd",
+    description: "Add nzbs directly to SABnzbd",
+    value: "SABNZBD",
+    type: "nzb"
   }
 ];
-
-export const DownloadClientTypeNameMap: Record<DownloadClientType | string, string> = {
-  "DELUGE_V1": "Deluge v1",
-  "DELUGE_V2": "Deluge v2",
-  "QBITTORRENT": "qBittorrent",
-  "RTORRENT": "rTorrent",
-  "TRANSMISSION": "Transmission",
-  "RADARR": "Radarr",
-  "SONARR": "Sonarr",
-  "LIDARR": "Lidarr",
-  "WHISPARR": "Whisparr"
-};
 
 export const ActionTypeOptions: RadioFieldsetOption[] = [
   { label: "Test", description: "A simple action to test a filter.", value: "TEST" },
@@ -230,13 +324,16 @@ export const ActionTypeOptions: RadioFieldsetOption[] = [
   { label: "Deluge v2", description: "Add torrents directly to Deluge 2", value: "DELUGE_V2" },
   { label: "rTorrent", description: "Add torrents directly to rTorrent", value: "RTORRENT" },
   { label: "Transmission", description: "Add torrents directly to Transmission", value: "TRANSMISSION" },
+  { label: "Porla", description: "Add torrents directly to Porla", value: "PORLA" },
   { label: "Radarr", description: "Send to Radarr and let it decide", value: "RADARR" },
   { label: "Sonarr", description: "Send to Sonarr and let it decide", value: "SONARR" },
   { label: "Lidarr", description: "Send to Lidarr and let it decide", value: "LIDARR" },
-  { label: "Whisparr", description: "Send to Whisparr and let it decide", value: "WHISPARR" }
+  { label: "Whisparr", description: "Send to Whisparr and let it decide", value: "WHISPARR" },
+  { label: "Readarr", description: "Send to Readarr and let it decide", value: "READARR" },
+  { label: "SABnzbd", description: "Add to SABnzbd", value: "SABNZBD" }
 ];
 
-export const ActionTypeNameMap = {
+export const ActionTypeNameMap: Record<ActionType, string> = {
   "TEST": "Test",
   "WATCH_FOLDER": "Watch folder",
   "WEBHOOK": "Webhook",
@@ -246,11 +343,29 @@ export const ActionTypeNameMap = {
   "QBITTORRENT": "qBittorrent",
   "RTORRENT": "rTorrent",
   "TRANSMISSION": "Transmission",
+  "PORLA": "Porla",
   "RADARR": "Radarr",
   "SONARR": "Sonarr",
   "LIDARR": "Lidarr",
-  "WHISPARR": "Whisparr"
-};
+  "WHISPARR": "Whisparr",
+  "READARR": "Readarr",
+  "SABNZBD": "SABnzbd"
+} as const;
+
+export const DOWNLOAD_CLIENTS = [
+  "QBITTORRENT",
+  "DELUGE_V1",
+  "DELUGE_V2",
+  "RTORRENT",
+  "TRANSMISSION",
+  "PORLA",
+  "RADARR",
+  "SONARR",
+  "LIDARR",
+  "WHISPARR",
+  "READARR",
+  "SABNZBD"
+];
 
 export const ActionContentLayoutOptions: SelectGenericOption<ActionContentLayout>[] = [
   { label: "Original", description: "Original", value: "ORIGINAL" },
@@ -258,9 +373,20 @@ export const ActionContentLayoutOptions: SelectGenericOption<ActionContentLayout
   { label: "Don't create subfolder", description: "Don't create subfolder", value: "SUBFOLDER_NONE" }
 ];
 
+export const ActionPriorityOptions: SelectGenericOption<ActionPriorityLayout>[] = [
+  { label: "Top of queue", description: "Top of queue", value: "MAX" },
+  { label: "Bottom of queue", description: "Bottom of queue", value: "MIN" },
+  { label: "Disabled", description: "Disabled", value: "" }
+];
+
+export const ActionRtorrentRenameOptions: SelectGenericOption<ActionContentLayout>[] = [
+  { label: "No", description: "No", value: "ORIGINAL" },
+  { label: "Yes", description: "Yes", value: "SUBFOLDER_NONE" }
+];
+
 export interface OptionBasic {
-    label: string;
-    value: string;
+  label: string;
+  value: string;
 }
 
 export interface OptionBasicTyped<T> {
@@ -283,18 +409,114 @@ export const PushStatusOptions: OptionBasic[] = [
   }
 ];
 
+export const ListTypeOptions: OptionBasicTyped<ListType>[] = [
+  {
+    label: "Sonarr",
+    value: "SONARR"
+  },
+  {
+    label: "Radarr",
+    value: "RADARR"
+  },
+  {
+    label: "Lidarr",
+    value: "LIDARR"
+  },
+  {
+    label: "Readarr",
+    value: "READARR"
+  },
+  {
+    label: "Whisparr",
+    value: "WHISPARR"
+  },
+  {
+    label: "MDBList",
+    value: "MDBLIST"
+  },
+  {
+    label: "Trakt",
+    value: "TRAKT"
+  },
+  {
+    label: "Plaintext",
+    value: "PLAINTEXT"
+  },
+  {
+    label: "Steam",
+    value: "STEAM"
+  },
+  {
+    label: "Metacritic",
+    value: "METACRITIC"
+  },
+  {
+    label: "AniList",
+    value: "ANILIST"
+  },
+];
+
+export const ListTypeNameMap: Record<ListType, string> = {
+  "SONARR": "Sonarr",
+  "RADARR": "Radarr",
+  "LIDARR": "Lidarr",
+  "READARR": "Readarr",
+  "WHISPARR": "Whisparr",
+  "MDBLIST": "MDBList",
+  "TRAKT": "Trakt",
+  "METACRITIC": "Metacritic",
+  "STEAM": "Steam",
+  "PLAINTEXT": "Plaintext",
+  "ANILIST": "AniList",
+};
+
 export const NotificationTypeOptions: OptionBasicTyped<NotificationType>[] = [
   {
     label: "Discord",
     value: "DISCORD"
   },
   {
+    label: "Gotify",
+    value: "GOTIFY"
+  },
+  {
+    label: "LunaSea",
+    value: "LUNASEA"
+  },
+  {
     label: "Notifiarr",
     value: "NOTIFIARR"
   },
   {
+    label: "Ntfy",
+    value: "NTFY"
+  },
+  {
+    label: "Pushover",
+    value: "PUSHOVER"
+  },
+  {
+    label: "Shoutrrr",
+    value: "SHOUTRRR"
+  },
+  {
     label: "Telegram",
     value: "TELEGRAM"
+  },
+];
+
+export const IrcAuthMechanismTypeOptions: OptionBasicTyped<IrcAuthMechanism>[] = [
+  {
+    label: "None",
+    value: "NONE"
+  },
+  {
+    label: "SASL (plain)",
+    value: "SASL_PLAIN"
+  },
+  {
+    label: "NickServ",
+    value: "NICKSERV"
   }
 ];
 
@@ -325,10 +547,40 @@ export const downloadsPerUnitOptions: OptionBasic[] = [
   }
 ];
 
+export const DownloadRuleConditionOptions: OptionBasic[] = [
+  {
+    label: "Always",
+    value: "ALWAYS"
+  },
+  {
+    label: "Max downloads reached",
+    value: "MAX_DOWNLOADS_REACHED"
+  }
+];
+
+export const DownloadClientAuthType: OptionBasic[] = [
+  {
+    label: "None",
+    value: "NONE"
+  },
+  {
+    label: "Basic Auth",
+    value: "BASIC_AUTH"
+  },
+  {
+    label: "Digest Auth",
+    value: "DIGEST_AUTH"
+  }
+];
+
+const logLevel = ["DEBUG", "INFO", "WARN", "ERROR", "TRACE"] as const;
+
+export const LogLevelOptions = logLevel.map(v => ({ value: v, label: v, key: v }));
+
 export interface SelectOption {
-    label: string;
-    description: string;
-    value: NotificationEvent;
+  label: string;
+  description: string;
+  value: NotificationEvent;
 }
 
 export interface SelectGenericOption<T> {
@@ -368,4 +620,111 @@ export const EventOptions: SelectOption[] = [
     value: "APP_UPDATE_AVAILABLE",
     description: "Get notified on updates"
   }
+];
+
+export const FeedDownloadTypeOptions: OptionBasicTyped<FeedDownloadType>[] = [
+  {
+    label: "Magnet",
+    value: "MAGNET"
+  },
+  {
+    label: "Torrent",
+    value: "TORRENT"
+  }
+];
+
+export const tagsMatchLogicOptions: OptionBasic[] = [
+  {
+    label: "any",
+    value: "ANY"
+  },
+  {
+    label: "all",
+    value: "ALL"
+  }
+];
+
+export const ExternalFilterTypeOptions: RadioFieldsetOption[] = [
+  { label: "Exec", description: "Run a custom command", value: "EXEC" },
+  { label: "Webhook", description: "Run webhook", value: "WEBHOOK" }
+];
+
+export const ExternalFilterTypeNameMap = {
+  "EXEC": "Exec",
+  "WEBHOOK": "Webhook"
+};
+
+export const ExternalFilterWebhookMethodOptions: OptionBasicTyped<WebhookMethod>[] = [
+  { label: "GET", value: "GET" },
+  { label: "POST", value: "POST" },
+  { label: "PUT", value: "PUT" },
+  { label: "PATCH", value: "PATCH" },
+  { label: "DELETE", value: "DELETE" }
+];
+
+export const ProxyTypeOptions: OptionBasicTyped<ProxyType>[] = [
+  {
+    label: "SOCKS5",
+    value: "SOCKS5"
+  },
+];
+
+export const ListsTraktOptions: OptionBasic[] = [
+  {
+    label: "Anticipated TV",
+    value: "https://api.autobrr.com/lists/trakt/anticipated-tv"
+  },
+  {
+    label: "Popular TV",
+    value: "https://api.autobrr.com/lists/trakt/popular-tv"
+  },
+  {
+    label: "Upcoming Movies",
+    value: "https://api.autobrr.com/lists/trakt/upcoming-movies"
+  },
+  {
+    label: "Upcoming BluRay",
+    value: "https://api.autobrr.com/lists/trakt/upcoming-bluray"
+  },
+  {
+    label: "Popular TV",
+    value: "https://api.autobrr.com/lists/trakt/popular-tv"
+  },
+  {
+    label: "Steven Lu",
+    value: "https://api.autobrr.com/lists/stevenlu"
+  },
+];
+
+export const ListsMetacriticOptions: OptionBasic[] = [
+  {
+    label: "Upcoming Albums",
+    value: "https://api.autobrr.com/lists/metacritic/upcoming-albums"
+  },
+  {
+    label: "New Albums",
+    value: "https://api.autobrr.com/lists/metacritic/new-albums"
+  }
+];
+
+export const ListsMDBListOptions: OptionBasic[] = [
+  {
+    label: "Latest TV Shows",
+    value: "https://mdblist.com/lists/garycrawfordgc/latest-tv-shows/json"
+  },
+];
+
+export const ListsAniListOptions: OptionBasic[] = [
+  {
+    label: "Current anime season",
+    value: "https://api.autobrr.com/lists/anilist/seasonal"
+  },
+  {
+    label: "Trending animes",
+    value: "https://api.autobrr.com/lists/anilist/trending"
+  },
+  {
+    label: "Next anime season",
+    value: "https://api.autobrr.com/lists/anilist/upcoming"
+  },
 ];

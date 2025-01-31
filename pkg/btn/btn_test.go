@@ -1,6 +1,12 @@
+// Copyright (c) 2021 - 2025, Ludvig Lundgren and the autobrr contributors.
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+//go:build integration
+
 package btn
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +16,8 @@ import (
 
 	"github.com/autobrr/autobrr/internal/domain"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAPI(t *testing.T) {
@@ -63,9 +68,9 @@ func TestAPI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewClient(tt.fields.Url, tt.fields.APIKey)
+			c := NewClient(tt.fields.APIKey, WithUrl(ts.URL))
 
-			got, err := c.TestAPI()
+			got, err := c.TestAPI(context.Background())
 			if tt.wantErr && assert.Error(t, err) {
 				assert.Equal(t, tt.wantErr, err)
 			}
@@ -162,10 +167,9 @@ func TestClient_GetTorrentByID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			c := NewClient(tt.fields.APIKey, WithUrl(ts.URL))
 
-			c := NewClient(tt.fields.Url, tt.fields.APIKey)
-
-			got, err := c.GetTorrentByID(tt.args.torrentID)
+			got, err := c.GetTorrentByID(context.Background(), tt.args.torrentID)
 			if tt.wantErr && assert.Error(t, err) {
 				assert.Equal(t, tt.wantErr, err)
 			}
